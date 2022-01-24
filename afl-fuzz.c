@@ -3172,6 +3172,8 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
     /* Keep only if there are new bits in the map, add to queue for
        future fuzzing, etc. */
 
+    //Create instance specific map as virgin bits
+
     if (!(hnb = has_new_bits(virgin_bits))) {
       if (crash_mode) total_crashes++;
       return 0;
@@ -8088,11 +8090,42 @@ int main(int argc, char** argv) {
     if (stop_soon) goto stop_fuzzing;
   }
 
+  //main loop
+
   while (1) {
 
     u8 skipped_fuzz;
 
     cull_queue();
+
+    //Check queue with PAFL algo and mark as unfavored, if not relevant for worker
+    //TODO: Refactor into seperate method
+    //pafl_cull();
+
+    //Check/Set start and end
+    int map_interval_start = 0;
+    int map_interval_end = MAP_SIZE/2;
+    
+    struct queue_entry* q = queue;
+    while (q) //Iterate over all seeds in queue
+    {
+      int is_relevant = 0;
+      for (int i = map_interval_start; i < map_interval_end; ++i) {
+        if (q->trace_mini[i] == 1) is_relevant = 1;
+        printf("Found relevant seed!\n");
+        printf(q->trace_mini[i]);
+        printf("\n");
+        break;
+      }
+        
+      if (!is_relevant) {
+        q->favored = 0;
+        printf("Found irrelevant seed\n");
+        }
+
+      q = q->next;
+    }
+    
 
     if (!queue_cur) {
 
