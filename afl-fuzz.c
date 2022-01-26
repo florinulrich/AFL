@@ -210,6 +210,14 @@ static s32 splicing_with = -1;        /* Splicing with which test case?   */
 
 static u32 master_id, master_max;     /* Master instance job splitting    */
 
+struct sync_guides {                  /*Encapsulates guiding information for parallel fuzzing */
+  u32 instance_no;                    /* Number of this instance*/
+  u32 instance_total;                 /* Number of parallel instance*/
+  u32 map_interval_start;             /* Start position for map division approaches*/
+  u32 map_interval_size;              /* Size of considered map portion*/
+
+};
+
 static u32 syncing_case;              /* Syncing with case #...           */
 
 static s32 stage_cur_byte,            /* Byte offset of current stage op  */
@@ -294,6 +302,19 @@ static u8* (*post_handler)(u8* buf, u32* len);
 static s8  interesting_8[]  = { INTERESTING_8 };
 static s16 interesting_16[] = { INTERESTING_8, INTERESTING_16 };
 static s32 interesting_32[] = { INTERESTING_8, INTERESTING_16, INTERESTING_32 };
+
+struct parallel_guide
+{
+  u32 parallel_mode;
+  u32 total_node_count;
+  u32 node_number;
+  u32 map_interval_start;
+  u32 map_interval_size;
+  float percentage_last_considered; /* Tracked to populate plot data */
+};
+
+static struct parallel_guide* parallel_info;
+
 
 /* Fuzzing stages */
 
@@ -1362,6 +1383,49 @@ static void cull_queue(void) {
     mark_as_redundant(q, !q->favored);
     q = q->next;
   }
+
+}
+
+/* To guide parallel instances to consider differing subsets of seeds, the guiding information in the parallel_info global variable are used to reduce the set of favored seeds after the intitial queue culling. */
+static void cull_queue_parallel() {
+
+  //Determine start and endpoints of interval, prevent overflow
+  u32 map_interval_end = parallel_info->map_interval_start + parallel_info->map_interval_size;
+
+  map_interval_end = (map_interval_end < MAP_SIZE) ? map_interval_end : MAP_SIZE;
+
+  //Count relevant seeds for performance data
+  u32 relevant_counter = 0;
+
+  struct queue_entry* q = queue;
+  while (q) //Iterate over all seeds in queue
+  {
+    //Prevent segmentation fault
+    if(q->trace_mini) {
+      int is_relevant = 0;
+
+      //If one bit it set in interval, mark as a relevant seed
+      for (int i = parallel_info->map_interval_start; i < map_interval_end; ++i) {
+        if (q->trace_mini[i] == 1) is_relevant = 1;
+        relevant_counter++;
+        break;
+      }
+
+      //If not relevant, mark as unfavored and reduce count
+      if (!is_relevant && q->favored) {
+        q->favored = 0;
+        --queued_favored;
+      }
+    }
+    q = q->next;
+  }
+
+  //TODO: write seed percentage to plot data
+  //TODO: Other counting measures might be more appropriate
+  //Maybe count how many favorites where discarded?
+  parallel_info->percentage_last_considered = (float) relevant_counter / (float) queued_paths;
+
+  printf("%.2f of paths considered", parallel_info->percentage_last_considered);
 
 }
 
@@ -7797,7 +7861,7 @@ int main(int argc, char** argv) {
   gettimeofday(&tv, &tz);
   srandom(tv.tv_sec ^ tv.tv_usec ^ getpid());
 
-  while ((opt = getopt(argc, argv, "+i:o:f:m:b:t:T:dnCB:S:M:x:QV")) > 0)
+  while ((opt = getopt(argc, argv, "+i:o:f:m:b:t:T:dnCB:S:M:x:QV:P")) > 0)
 
     switch (opt) {
 
@@ -7843,6 +7907,39 @@ int main(int argc, char** argv) {
 
         if (sync_id) FATAL("Multiple -S or -M options not supported");
         sync_id = ck_strdup(optarg);
+        break;
+
+      case 'P': /* parallel options */
+
+        if (parallel_info) FATAL("Multiple -P options not supported");
+        //Create parallel_guide struct on heap
+        parallel_info = ck_alloc(sizeof(struct parallel_guide));
+
+        //Populate members
+        //optarg = node_number/total_nodes:parallelMode
+
+        //Check node input format
+        char* node_delim = strchar(optarg, '/');
+        if (!node_delim) FATAL("Specify node number and code count. E.g 1/2");
+
+        //Check mode input format
+        char* mode_delim = strchar(optarg, ':');
+
+        //Set values
+        if(!mode_delim) {
+          sscanf(node_delim)
+
+          //Set mode to default
+          parallel_info->parallel_mode = 0;
+        }
+        else {
+          //TODO: Implement modes
+          FATAL("Changing modes pending implementation");
+        }
+
+        printf("%d: Node, %d: Count, %d: Mode", parallel_info->node_number, parallel_info->total_node_count, parallel_info->parallel_mode);
+        exit(0);
+
         break;
 
       case 'f': /* target file */
@@ -8098,34 +8195,9 @@ int main(int argc, char** argv) {
 
     cull_queue();
 
-    //Check queue with PAFL algo and mark as unfavored, if not relevant for worker
-    //TODO: Refactor into seperate method
-    //pafl_cull();
+    /* If guiding information for parallel moode exists, cull queue further */
+    if (parallel_info) cull_queue_parallel();
 
-    //Check/Set start and end
-    int map_interval_start = 0;
-    int map_interval_end = MAP_SIZE/2;
-    
-    struct queue_entry* q = queue;
-    while (q) //Iterate over all seeds in queue
-    {
-      int is_relevant = 0;
-      for (int i = map_interval_start; i < map_interval_end; ++i) {
-        if (q->trace_mini[i] == 1) is_relevant = 1;
-        printf("Found relevant seed!\n");
-        printf(q->trace_mini[i]);
-        printf("\n");
-        break;
-      }
-        
-      if (!is_relevant) {
-        q->favored = 0;
-        printf("Found irrelevant seed\n");
-        }
-
-      q = q->next;
-    }
-    
 
     if (!queue_cur) {
 
