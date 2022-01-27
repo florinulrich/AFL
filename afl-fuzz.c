@@ -1394,6 +1394,9 @@ static void cull_queue_parallel() {
 
   map_interval_end = (map_interval_end < MAP_SIZE) ? map_interval_end : MAP_SIZE;
 
+  //TODO: Remove Debug code
+  // printf("[start, end, MAP_SIZE]: [%d, %d, %d]\n", parallel_info->map_interval_start, map_interval_end, MAP_SIZE);
+
   //Count relevant seeds for performance data
   u32 relevant_counter = 0;
 
@@ -1404,7 +1407,7 @@ static void cull_queue_parallel() {
     if(q->trace_mini) {
       int is_relevant = 0;
 
-      //If one bit it set in interval, mark as a relevant seed
+      //If one bit is set in interval, mark as a relevant seed
       for (int i = parallel_info->map_interval_start; i < map_interval_end; ++i) {
         if (q->trace_mini[i] == 1) is_relevant = 1;
         relevant_counter++;
@@ -1420,12 +1423,17 @@ static void cull_queue_parallel() {
     q = q->next;
   }
 
-  //TODO: write seed percentage to plot data
+  //Calculate seed percentage for plot data
+  parallel_info->percentage_last_considered = 100 *((float) relevant_counter / (float) queued_paths);
+
+
+
   //TODO: Other counting measures might be more appropriate
   //Maybe count how many favorites where discarded?
-  parallel_info->percentage_last_considered = (float) relevant_counter / (float) queued_paths;
 
-  printf("%.2f of paths considered", parallel_info->percentage_last_considered);
+  //TODO: Remove debug code
+  // printf("%d/%d paths considered\n", relevant_counter, queued_paths);
+  // printf("%6.2f %% of paths considered\n", parallel_info->percentage_last_considered);
 
 }
 
@@ -3606,13 +3614,13 @@ static void maybe_update_plot_file(double bitmap_cvg, double eps) {
 
      unix_time, cycles_done, cur_path, paths_total, paths_not_fuzzed,
      favored_not_fuzzed, unique_crashes, unique_hangs, max_depth,
-     execs_per_sec */
+     execs_per_sec, paths_considered */
 
   fprintf(plot_file, 
-          "%llu, %llu, %u, %u, %u, %u, %0.02f%%, %llu, %llu, %u, %0.02f\n",
+          "%llu, %llu, %u, %u, %u, %u, %0.02f%%, %llu, %llu, %u, %0.02f, %0.02f%%\n",
           get_cur_time() / 1000, queue_cycle - 1, current_entry, queued_paths,
           pending_not_fuzzed, pending_favored, bitmap_cvg, unique_crashes,
-          unique_hangs, max_depth, eps); /* ignore errors */
+          unique_hangs, max_depth, eps, parallel_info->percentage_last_considered); /* ignore errors */
 
   fflush(plot_file);
 
@@ -7861,7 +7869,7 @@ int main(int argc, char** argv) {
   gettimeofday(&tv, &tz);
   srandom(tv.tv_sec ^ tv.tv_usec ^ getpid());
 
-  while ((opt = getopt(argc, argv, "+i:o:f:m:b:t:T:dnCB:S:M:x:QV:P")) > 0)
+  while ((opt = getopt(argc, argv, "+i:o:f:m:b:t:T:dnCB:S:M:P:x:QV")) > 0)
 
     switch (opt) {
 
@@ -7919,15 +7927,21 @@ int main(int argc, char** argv) {
         //optarg = node_number/total_nodes:parallelMode
 
         //Check node input format
-        char* node_delim = strchar(optarg, '/');
+        char* node_delim = strchr(optarg, '/');
         if (!node_delim) FATAL("Specify node number and code count. E.g 1/2");
 
         //Check mode input format
-        char* mode_delim = strchar(optarg, ':');
+        char* mode_delim = strchr(optarg, ':');
 
         //Set values
         if(!mode_delim) {
-          sscanf(node_delim)
+          sscanf(optarg, "%u/%u", &(parallel_info->node_number), &(parallel_info->total_node_count));
+
+          //Determine interval size
+          parallel_info->map_interval_size = MAP_SIZE /parallel_info->total_node_count;
+
+          //Determine instance start position
+          parallel_info->map_interval_start = parallel_info->map_interval_size * (parallel_info->node_number-1);
 
           //Set mode to default
           parallel_info->parallel_mode = 0;
@@ -7936,9 +7950,6 @@ int main(int argc, char** argv) {
           //TODO: Implement modes
           FATAL("Changing modes pending implementation");
         }
-
-        printf("%d: Node, %d: Count, %d: Mode", parallel_info->node_number, parallel_info->total_node_count, parallel_info->parallel_mode);
-        exit(0);
 
         break;
 
