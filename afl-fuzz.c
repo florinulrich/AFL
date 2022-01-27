@@ -1389,6 +1389,29 @@ static void cull_queue(void) {
 /* To guide parallel instances to consider differing subsets of seeds, the guiding information in the parallel_info global variable are used to reduce the set of favored seeds after the intitial queue culling. */
 static void cull_queue_parallel() {
 
+  switch (parallel_info->parallel_mode)
+  {
+  case 1 : /* PAFL Algo culling*/
+
+    //TODO: Implement PAFL Algo
+    FATAL("PAFL Algo not yet implemented");
+    break;
+
+  case 2: /* Dynamic map partition size culling */
+
+    //TODO: Implement dynamic map division
+    FATAL("Dynamic map division culling not yet implemented");
+    break;
+  
+  default: /* Primitive Map division culling */
+
+    primitive_map_division_culling();
+    break;
+  }
+}
+
+static void primitive_map_division_culling() {
+
   //Determine start and endpoints of interval, prevent overflow
   u32 map_interval_end = parallel_info->map_interval_start + parallel_info->map_interval_size;
 
