@@ -1386,30 +1386,6 @@ static void cull_queue(void) {
 
 }
 
-/* To guide parallel instances to consider differing subsets of seeds, the guiding information in the parallel_info global variable are used to reduce the set of favored seeds after the intitial queue culling. */
-static void cull_queue_parallel() {
-
-  switch (parallel_info->parallel_mode)
-  {
-  case 1 : /* PAFL Algo culling*/
-
-    //TODO: Implement PAFL Algo
-    FATAL("PAFL Algo not yet implemented");
-    break;
-
-  case 2: /* Dynamic map partition size culling */
-
-    //TODO: Implement dynamic map division
-    FATAL("Dynamic map division culling not yet implemented");
-    break;
-  
-  default: /* Primitive Map division culling */
-
-    primitive_map_division_culling();
-    break;
-  }
-}
-
 static void primitive_map_division_culling() {
 
   //Determine start and endpoints of interval, prevent overflow
@@ -1458,6 +1434,30 @@ static void primitive_map_division_culling() {
   // printf("%d/%d paths considered\n", relevant_counter, queued_paths);
   // printf("%6.2f %% of paths considered\n", parallel_info->percentage_last_considered);
 
+}
+
+/* To guide parallel instances to consider differing subsets of seeds, the guiding information in the parallel_info global variable are used to reduce the set of favored seeds after the intitial queue culling. */
+static void cull_queue_parallel() {
+
+  switch (parallel_info->parallel_mode)
+  {
+  case 1 : /* PAFL Algo culling*/
+
+    //TODO: Implement PAFL Algo
+    FATAL("PAFL Algo not yet implemented");
+    break;
+
+  case 2: /* Dynamic map partition size culling */
+
+    //TODO: Implement dynamic map division
+    FATAL("Dynamic map division culling not yet implemented");
+    break;
+  
+  default: /* Primitive Map division culling */
+
+    primitive_map_division_culling();
+    break;
+  }
 }
 
 
@@ -7960,19 +7960,18 @@ int main(int argc, char** argv) {
         if(!mode_delim) {
           sscanf(optarg, "%u/%u", &(parallel_info->node_number), &(parallel_info->total_node_count));
 
+          //Set mode to default
+          parallel_info->parallel_mode = 0;
+        }
+        else {
+          sscanf(optarg, "%u/%u:%u", &(parallel_info->node_number), &(parallel_info->total_node_count), &(parallel_info->parallel_mode));
+        }
+
           //Determine interval size
           parallel_info->map_interval_size = MAP_SIZE /parallel_info->total_node_count;
 
           //Determine instance start position
           parallel_info->map_interval_start = parallel_info->map_interval_size * (parallel_info->node_number-1);
-
-          //Set mode to default
-          parallel_info->parallel_mode = 0;
-        }
-        else {
-          //TODO: Implement modes
-          FATAL("Changing modes pending implementation");
-        }
 
         break;
 
