@@ -327,6 +327,7 @@
 
 #define MAP_SIZE_POW2       16
 #define MAP_SIZE            (1 << MAP_SIZE_POW2)
+#define TRACE_MINI_SIZE     (MAP_SIZE >> 3)
 
 /* Maximum allocator request size (keep well under INT_MAX): */
 

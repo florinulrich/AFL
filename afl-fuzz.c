@@ -150,6 +150,9 @@ static s32 forksrv_pid,               /* PID of the fork server           */
 
 EXP_ST u8* trace_bits;                /* SHM with instrumentation bitmap  */
 
+EXP_ST int hit_counts[TRACE_MINI_SIZE]; /* Total hits for every path */
+EXP_ST int keep_hit_count;
+
 EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
            virgin_tmout[MAP_SIZE],    /* Bits we haven't seen in tmouts   */
            virgin_crash[MAP_SIZE];    /* Bits we haven't seen in crashes  */
@@ -269,6 +272,7 @@ struct queue_entry {
 
   u8* trace_mini;                     /* Trace bytes, if kept             */
   u32 tc_ref;                         /* Trace bytes ref count            */
+  u8 this_instance;                   /* Tracks wehter to consider entry for parallel instance */
 
   struct queue_entry *next,           /* Next element, if any             */
                      *next_100;       /* 100 elements ahead               */
@@ -1391,7 +1395,7 @@ static void primitive_map_division_culling() {
   //Determine start and endpoints of interval, prevent overflow
   u32 map_interval_end = parallel_info->map_interval_start + parallel_info->map_interval_size;
 
-  map_interval_end = (map_interval_end < MAP_SIZE) ? map_interval_end : MAP_SIZE;
+  map_interval_end = map_interval_end < TRACE_MINI_SIZE ? map_interval_end : TRACE_MINI_SIZE;
 
   //TODO: Remove Debug code
   // printf("[start, end, MAP_SIZE]: [%d, %d, %d]\n", parallel_info->map_interval_start, map_interval_end, MAP_SIZE);
@@ -1404,19 +1408,18 @@ static void primitive_map_division_culling() {
   {
     //Prevent segmentation fault
     if(q->trace_mini) {
-      int is_relevant = 0;
 
-      //If one bit is set in interval, mark as a relevant seed
+      //Set as uninteresting (not set could mean deactivated parallelism)
+      q->this_instance = 0;
+
+      //If one bit is set in interval, mark as a seed to consider in this instance
       for (int i = parallel_info->map_interval_start; i < map_interval_end; ++i) {
-        if (q->trace_mini[i] == 1) is_relevant = 1;
-        relevant_counter++;
-        break;
-      }
 
-      //If not relevant, mark as unfavored and reduce count
-      if (!is_relevant && q->favored) {
-        q->favored = 0;
-        --queued_favored;
+        if (q->trace_mini[i] == 1) {
+          relevant_counter++;
+          q->this_instance = 1;
+          break;
+        }
       }
     }
     q = q->next;
@@ -1433,6 +1436,39 @@ static void primitive_map_division_culling() {
   //TODO: Remove debug code
   // printf("%d/%d paths considered\n", relevant_counter, queued_paths);
   // printf("%6.2f %% of paths considered\n", parallel_info->percentage_last_considered);
+}
+
+static void pafl_queue_culling() {
+
+  //Determine start and endpoints of interval, prevent overflow
+  u32 map_interval_end = parallel_info->map_interval_start + parallel_info->map_interval_size;
+
+  map_interval_end = map_interval_end < TRACE_MINI_SIZE ? map_interval_end : TRACE_MINI_SIZE;
+
+  //Count relevant seeds for performance data
+  u32 relevant_counter = 0;
+
+  struct queue_entry* q = queue;
+  while (q) //Iterate over all seeds in queue
+  {
+    //Prevent segmentation fault
+    if(q->trace_mini) {
+
+      //Set as uninteresting (not set could mean deactivated parallelism)
+      q->this_instance = 0;
+
+      //TODO: Make sure fuzzing happens even if there is no hit (yet?)
+      int biggest_hit = 0;
+
+      //Iterate over trace_mini, if 1, check corresponding hit_count
+      //If bigger than last hit count, update biggest hit
+    }
+    q = q->next;
+  }
+
+  //Calculate seed percentage for plot data
+  parallel_info->percentage_last_considered = 100 *((float) relevant_counter / (float) queued_paths);
+
 
 }
 
@@ -1603,6 +1639,8 @@ static void read_testcases(void) {
     if (!access(dfn, F_OK)) passed_det = 1;
     ck_free(dfn);
 
+
+    //At startup
     add_to_queue(fn, st.st_size, passed_det);
 
   }
@@ -3250,6 +3288,18 @@ static void write_crash_readme(void) {
 
 }
 
+/* After adding the seed to the queue, update the hit count of the local hit_counts */
+static void update_hit_counts(u8* trace_bits) {
+
+  u8* mini = ck_alloc(TRACE_MINI_SIZE);
+  minimize_bits(mini, trace_bits);
+  
+  for (int i = 0; i < TRACE_MINI_SIZE; i++)
+    if (mini[i] == 1) ++hit_counts[i];
+
+  ck_free(mini);
+}
+
 
 /* Check if the result of an execve() during routine fuzzing is interesting,
    save or queue the input test case for further analysis if so. Returns 1 if
@@ -3286,6 +3336,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 #endif /* ^!SIMPLE_FILES */
 
     add_to_queue(fn, len, 0);
+    if(keep_hit_count) update_hit_counts(trace_bits);
 
     if (hnb == 2) {
       queue_top->has_new_cov = 1;
@@ -5109,6 +5160,9 @@ static u8 fuzz_one(char** argv) {
   u8  a_collect[MAX_AUTO_EXTRA];
   u32 a_len = 0;
 
+  /* If in parallel mode, skip entry, if it is not assigned to this instance */
+  if (queue_cur->this_instance && queue_cur->this_instance == 0) return 1;
+
 #ifdef IGNORE_FINDS
 
   /* In IGNORE_FINDS mode, skip any entries that weren't in the
@@ -5117,7 +5171,6 @@ static u8 fuzz_one(char** argv) {
   if (queue_cur->depth > 1) return 1;
 
 #else
-
   if (pending_favored) {
 
     /* If we have any favored, non-fuzzed new arrivals in the queue,
@@ -7942,6 +7995,9 @@ int main(int argc, char** argv) {
 
       case 'P': /* parallel options */
 
+        //TODO: Make dependend on selected mode
+        keep_hit_count = 1;
+
         if (parallel_info) FATAL("Multiple -P options not supported");
         //Create parallel_guide struct on heap
         parallel_info = ck_alloc(sizeof(struct parallel_guide));
@@ -7964,11 +8020,13 @@ int main(int argc, char** argv) {
           parallel_info->parallel_mode = 0;
         }
         else {
+
+          //TODO: Implement switch statement for human readable mode names
           sscanf(optarg, "%u/%u:%u", &(parallel_info->node_number), &(parallel_info->total_node_count), &(parallel_info->parallel_mode));
         }
 
-          //Determine interval size
-          parallel_info->map_interval_size = MAP_SIZE /parallel_info->total_node_count;
+          //Determine interval size (Us TRACE_MINI_SIZE because trace mini will be iterated)
+          parallel_info->map_interval_size = TRACE_MINI_SIZE /parallel_info->total_node_count;
 
           //Determine instance start position
           parallel_info->map_interval_start = parallel_info->map_interval_size * (parallel_info->node_number-1);
