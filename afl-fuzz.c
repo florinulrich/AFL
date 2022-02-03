@@ -1438,7 +1438,7 @@ static void primitive_map_division_culling() {
   // printf("%6.2f %% of paths considered\n", parallel_info->percentage_last_considered);
 }
 
-static void pafl_queue_culling() {
+static void pafl_max_queue_culling() {
 
   //Determine start and endpoints of interval, prevent overflow
   u32 map_interval_end = parallel_info->map_interval_start + parallel_info->map_interval_size;
@@ -1479,8 +1479,51 @@ static void pafl_queue_culling() {
 
   //Calculate seed percentage for plot data
   parallel_info->percentage_last_considered = 100 *((float) relevant_counter / (float) queued_paths);
+}
+
+static void pafl_queue_culling() {
+
+  //Determine start and endpoints of interval, prevent overflow
+  u32 map_interval_end = parallel_info->map_interval_start + parallel_info->map_interval_size;
+
+  map_interval_end = map_interval_end < TRACE_MINI_SIZE ? map_interval_end : TRACE_MINI_SIZE;
+
+  //Count relevant seeds for performance data
+  u32 relevant_counter = 0;
+
+  struct queue_entry* q = queue;
+  while (q) //Iterate over all seeds in queue
+  {
+    //Prevent segmentation fault
+    if(q->trace_mini) {
+
+      //Set as uninteresting (not set could mean deactivated parallelism)
+      q->this_instance = 0;
+
+      //TODO: Make sure fuzzing happens even if there is no hit (yet?)
+      int min_hit_position = 0;
 
 
+      //TODO: This implementation takes LAST min, since many trace bits are often 0. Is this reasonable?
+      for (int i = 0; i < TRACE_MINI_SIZE; i++)
+      {
+        if (q->trace_mini[i] == 1 &&
+          hit_counts[i] <= hit_counts[min_hit_position])
+          min_hit_position = i;
+      }
+
+      if (min_hit_position >= parallel_info->map_interval_start &&
+        min_hit_position < map_interval_end) {
+          q->this_instance = 1;
+          ++relevant_counter;
+        }
+      
+    }
+    q = q->next;
+  }
+
+  //Calculate seed percentage for plot data
+  parallel_info->percentage_last_considered = 100 *((float) relevant_counter / (float) queued_paths);
 }
 
 /* To guide parallel instances to consider differing subsets of seeds, the guiding information in the parallel_info global variable are used to reduce the set of favored seeds after the intitial queue culling. */
@@ -1490,11 +1533,18 @@ static void cull_queue_parallel() {
   {
   case 1 : /* PAFL Algo culling*/
 
-    //TODO: Implement PAFL Algo
+    //TODO: Implement original PAFL
     pafl_queue_culling();
     break;
 
-  case 2: /* Dynamic map partition size culling */
+
+  case 2 : /* PAFL Max Algo culling*/
+
+    //TODO: Implement PAFL Algo
+    pafl_max_queue_culling();
+    break;
+
+  case 3: /* Dynamic map partition size culling */
 
     //TODO: Implement dynamic map division
     FATAL("Dynamic map division culling not yet implemented");
