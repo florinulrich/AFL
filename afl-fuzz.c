@@ -1458,10 +1458,21 @@ static void pafl_queue_culling() {
       q->this_instance = 0;
 
       //TODO: Make sure fuzzing happens even if there is no hit (yet?)
-      int biggest_hit = 0;
+      int biggest_hit_position = 0;
 
-      //Iterate over trace_mini, if 1, check corresponding hit_count
-      //If bigger than last hit count, update biggest hit
+      for (int i = 0; i < TRACE_MINI_SIZE; i++)
+      {
+        if (q->trace_mini[i] == 1 &&
+          hit_counts[i] > hit_counts[biggest_hit_position])
+          biggest_hit_position = i;
+      }
+
+      if (biggest_hit_position >= parallel_info->map_interval_start &&
+        biggest_hit_position < map_interval_end) {
+          q->this_instance = 1;
+          ++relevant_counter;
+        }
+      
     }
     q = q->next;
   }
@@ -1480,7 +1491,7 @@ static void cull_queue_parallel() {
   case 1 : /* PAFL Algo culling*/
 
     //TODO: Implement PAFL Algo
-    FATAL("PAFL Algo not yet implemented");
+    pafl_queue_culling();
     break;
 
   case 2: /* Dynamic map partition size culling */
