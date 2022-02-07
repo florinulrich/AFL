@@ -1309,8 +1309,12 @@ static void update_bitmap_score(struct queue_entry* q) {
             previous winner, discard its trace_bits[] if necessary. */
 
          if (!--top_rated[i]->tc_ref) {
-           ck_free(top_rated[i]->trace_mini);
-           top_rated[i]->trace_mini = 0;
+
+           /* If in parallel mode, keep trace_mini */
+           if (!parallel_info) {
+              ck_free(top_rated[i]->trace_mini);
+              top_rated[i]->trace_mini = 0;
+           }
          }
 
        }
@@ -1491,13 +1495,18 @@ static void pafl_queue_culling() {
   //Count relevant seeds for performance data
   u32 relevant_counter = 0;
 
+  //Count the seeds that can be evaluated
+  u32 seeds_with_trace_mini = 0;
+
   struct queue_entry* q = queue;
   while (q) //Iterate over all seeds in queue
   {
     //Prevent segmentation fault
     if(q->trace_mini) {
 
-      //Set as uninteresting (not set could mean deactivated parallelism)
+      ++seeds_with_trace_mini;
+
+      //Set as uninteresting
       q->this_instance = 0;
 
       //TODO: Make sure fuzzing happens even if there is no hit (yet?)
@@ -1523,7 +1532,54 @@ static void pafl_queue_culling() {
   }
 
   //Calculate seed percentage for plot data
+  parallel_info->percentage_last_considered = 100 *((float) relevant_counter / (float) seeds_with_trace_mini);
+}
+
+static void pafl_dynamic_portion_queue_culling() {
+
+  //Determine start and endpoints of interval, prevent overflow
+  u32 map_interval_end = parallel_info->map_interval_start + parallel_info->map_interval_size;
+
+  map_interval_end = map_interval_end < TRACE_MINI_SIZE ? map_interval_end : TRACE_MINI_SIZE;
+
+  //Count relevant seeds for performance data
+  u32 relevant_counter = 0;
+
+  struct queue_entry* q = queue;
+  while (q) //Iterate over all seeds in queue
+  {
+    //Prevent segmentation fault
+    if(q->trace_mini) {
+
+      //Set as uninteresting (not set could mean deactivated parallelism)
+      q->this_instance = 0;
+
+      //TODO: Make sure fuzzing happens even if there is no hit (yet?)
+      int biggest_hit_position = 0;
+
+      for (int i = 0; i < TRACE_MINI_SIZE; i++)
+      {
+        if (q->trace_mini[i] == 1 &&
+          hit_counts[i] > hit_counts[biggest_hit_position])
+          biggest_hit_position = i;
+      }
+
+      if (biggest_hit_position >= parallel_info->map_interval_start &&
+        biggest_hit_position < map_interval_end) {
+          q->this_instance = 1;
+          ++relevant_counter;
+        }
+      
+    }
+    q = q->next;
+  }
+
+  //Calculate seed percentage for plot data
   parallel_info->percentage_last_considered = 100 *((float) relevant_counter / (float) queued_paths);
+
+  //TODO: Maybe put in seperate method
+  
+  //Increase, decrease instance 
 }
 
 /* To guide parallel instances to consider differing subsets of seeds, the guiding information in the parallel_info global variable are used to reduce the set of favored seeds after the intitial queue culling. */
@@ -1547,7 +1603,7 @@ static void cull_queue_parallel() {
   case 3: /* Dynamic map partition size culling */
 
     //TODO: Implement dynamic map division
-    FATAL("Dynamic map division culling not yet implemented");
+    pafl_dynamic_portion_queue_culling();
     break;
   
   default: /* Primitive Map division culling */
@@ -5221,9 +5277,6 @@ static u8 fuzz_one(char** argv) {
   u8  a_collect[MAX_AUTO_EXTRA];
   u32 a_len = 0;
 
-  /* If in parallel mode, skip entry, if it is not assigned to this instance */
-  if (queue_cur->this_instance && queue_cur->this_instance == 0) return 1;
-
 #ifdef IGNORE_FINDS
 
   /* In IGNORE_FINDS mode, skip any entries that weren't in the
@@ -5232,6 +5285,12 @@ static u8 fuzz_one(char** argv) {
   if (queue_cur->depth > 1) return 1;
 
 #else
+
+    /* If in parallel mode (parallel_info exists), skip entry, if it is not assigned to this instance (this_instance is 0) */
+  if (parallel_info && !queue_cur->this_instance) return 1;
+
+  /* If in parallel mode, skip entry, if it is not assigned to this instance */
+  if (queue_cur->this_instance && !queue_cur->this_instance) return 1;
   if (pending_favored) {
 
     /* If we have any favored, non-fuzzed new arrivals in the queue,
