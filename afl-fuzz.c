@@ -1444,6 +1444,8 @@ static void primitive_map_division_culling() {
 
 static void pafl_max_queue_culling() {
 
+  //TODO Refactor if else statement and multiple assignments of this instance
+
   //Determine start and endpoints of interval, prevent overflow
   u32 map_interval_end = parallel_info->map_interval_start + parallel_info->map_interval_size;
 
@@ -1458,7 +1460,7 @@ static void pafl_max_queue_culling() {
     //Prevent segmentation fault
     if(q->trace_mini) {
 
-      //Set as uninteresting (not set could mean deactivated parallelism)
+      //Set as uninteresting
       q->this_instance = 0;
 
       //TODO: Make sure fuzzing happens even if there is no hit (yet?)
@@ -1477,7 +1479,13 @@ static void pafl_max_queue_culling() {
           ++relevant_counter;
         }
       
+    } else
+    {
+      //If the trace_mini is not available, treat as interesting
+      //Otherwise no seed would be interesting in the beginning
+      q->this_instance = 1;
     }
+    
     q = q->next;
   }
 
@@ -1527,6 +1535,11 @@ static void pafl_queue_culling() {
           ++relevant_counter;
         }
       
+    } else
+    {
+      //If the trace_mini is not available, treat as interesting
+      //Otherwise no seed would be interesting in the beginning
+      q->this_instance = 1;
     }
     q = q->next;
   }
@@ -5286,8 +5299,8 @@ static u8 fuzz_one(char** argv) {
 
 #else
 
-    /* If in parallel mode (parallel_info exists), skip entry, if it is not assigned to this instance (this_instance is 0) */
-  if (parallel_info && !queue_cur->this_instance) return 1;
+  /* If in parallel mode (parallel_info exists), skip entry if this_instance is not 1. If queued paths < 10 skip this step to get things rolling. */
+  if (parallel_info && !queue_cur->this_instance && queued_paths > 10) return 1;
 
   /* If in parallel mode, skip entry, if it is not assigned to this instance */
   if (queue_cur->this_instance && !queue_cur->this_instance) return 1;
@@ -7090,7 +7103,44 @@ static void sync_fuzzers(char** argv) {
     closedir(qd);
     ck_free(qd_path);
     ck_free(qd_synced_path);
-    
+
+    /* Sync the hit count array if necessary */
+    if (parallel_info) {
+      u8* hc_path_other_fuzzer = alloc_printf("%s/%s/hit_count", sync_dir, sd_ent->d_name);
+      u8* hc_path_this_fuzzer = alloc_printf("%s/%s/hit_count", sync_dir, sync_id);
+
+      FILE *hc_file_other_fuzzer;
+      FILE *hc_file_this_fuzzer;
+      int prev_hc[TRACE_MINI_SIZE];
+
+      //TODO: Fix data portability (little / big endian)
+
+      /* If opening fails, skip. Other fuzzer might be using it */
+      if ( (hc_file_other_fuzzer = fopen(hc_path_other_fuzzer, "rb")) ) {
+        //Read
+        if (!fread(prev_hc, sizeof(prev_hc), 1, hc_file_other_fuzzer))
+          WARNF("Error reading hit_count file %s", hc_path_other_fuzzer);
+        fclose(hc_file_other_fuzzer);
+
+        //Calculate Max
+        for (int i = 0; i < TRACE_MINI_SIZE; i++)
+        {
+          hit_counts[i] = hit_counts[i] > prev_hc[i] ? hit_counts[i] : prev_hc[i];
+        }
+      }
+      
+      //Write back hit_counts to own directory, if possible
+      if ( (hc_file_this_fuzzer = fopen(hc_path_this_fuzzer, "wb")) ) {
+
+        if (!fwrite(hit_counts, sizeof(hit_counts), 1, hc_file_this_fuzzer))
+          WARNF("Error writing hit_count file %s", hc_path_this_fuzzer);
+        fclose(hc_file_this_fuzzer);
+      }
+
+      //Free paths
+      ck_free(hc_path_this_fuzzer);
+      ck_free(hc_path_other_fuzzer);
+    }
   }  
 
   closedir(sd);
