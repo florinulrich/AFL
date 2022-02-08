@@ -1493,17 +1493,49 @@ static void pafl_max_queue_culling() {
   parallel_info->percentage_last_considered = 100 *((float) relevant_counter / (float) queued_paths);
 }
 
-static void pafl_queue_culling() {
+
+static inline int pafl_queue_culling(struct queue_entry* q, u32 interval_end) {
+
+      //Set as uninteresting and initial position to 0
+      q->this_instance = 0;
+      int min_hit_position = 0;
+      
+      //Find first hit position
+      for (int i = 0; i < TRACE_MINI_SIZE; i++)
+      {
+        if (q->trace_mini[i] == 1) min_hit_position = i;
+      }
+
+      //Update hit if smaller count is found
+      for (int i = min_hit_position; i < TRACE_MINI_SIZE; i++)
+      {
+        if (q->trace_mini[i] == 1 &&
+          hit_counts[i] < hit_counts[min_hit_position])
+          min_hit_position = i;
+      }
+
+      //TODO: Remove debug code!!
+      // SAYF("Start / i / End / MAX: %d / %d / %d / %d\n", parallel_info->map_interval_start, min_hit_position, interval_end, TRACE_MINI_SIZE);
+
+      //Check if min is in interesting interval
+      if (min_hit_position >= parallel_info->map_interval_start &&
+        min_hit_position < interval_end) {
+          q->this_instance = 1;
+          return 1;
+        }
+        return 0;
+}
+
+/* Keep setupt and analysis stuff in one place. Pass chosen selection mechanism */
+static void qcp_wrapper(int (*selection)(struct queue_entry* q, u32 interval_end)) {
 
   //Determine start and endpoints of interval, prevent overflow
   u32 map_interval_end = parallel_info->map_interval_start + parallel_info->map_interval_size;
 
   map_interval_end = map_interval_end < TRACE_MINI_SIZE ? map_interval_end : TRACE_MINI_SIZE;
 
-  //Count relevant seeds for performance data
+  //Count relevant seeds and seeds with a trace for performance data
   u32 relevant_counter = 0;
-
-  //Count the seeds that can be evaluated
   u32 seeds_with_trace_mini = 0;
 
   struct queue_entry* q = queue;
@@ -1514,31 +1546,13 @@ static void pafl_queue_culling() {
 
       ++seeds_with_trace_mini;
 
-      //Set as uninteresting
-      q->this_instance = 0;
+      /* Run selection algorithm. Returns wether the seed was relevant (1) or not (0) */
+      relevant_counter += selection(q, map_interval_end);
 
-      //TODO: Make sure fuzzing happens even if there is no hit (yet?)
-      int min_hit_position = 0;
-
-
-      //TODO: This implementation takes LAST min, since many trace bits are often 0. Is this reasonable?
-      for (int i = 0; i < TRACE_MINI_SIZE; i++)
-      {
-        if (q->trace_mini[i] == 1 &&
-          hit_counts[i] <= hit_counts[min_hit_position])
-          min_hit_position = i;
-      }
-
-      if (min_hit_position >= parallel_info->map_interval_start &&
-        min_hit_position < map_interval_end) {
-          q->this_instance = 1;
-          ++relevant_counter;
-        }
-      
     } else
     {
       //If the trace_mini is not available, treat as interesting
-      //Otherwise no seed would be interesting in the beginning
+      //This aims to make it be evaluated at some point
       q->this_instance = 1;
     }
     q = q->next;
@@ -1546,6 +1560,8 @@ static void pafl_queue_culling() {
 
   //Calculate seed percentage for plot data
   parallel_info->percentage_last_considered = 100 *((float) relevant_counter / (float) seeds_with_trace_mini);
+
+  SAYF("relevant: %d // with trace: %d\n", relevant_counter, seeds_with_trace_mini);
 }
 
 static void pafl_dynamic_portion_queue_culling() {
@@ -1603,7 +1619,7 @@ static void cull_queue_parallel() {
   case 1 : /* PAFL Algo culling*/
 
     //TODO: Implement original PAFL
-    pafl_queue_culling();
+    qcp_wrapper(pafl_queue_culling);
     break;
 
 
