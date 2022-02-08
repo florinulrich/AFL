@@ -5302,8 +5302,7 @@ static u8 fuzz_one(char** argv) {
   /* If in parallel mode (parallel_info exists), skip entry if this_instance is not 1. If queued paths < 10 skip this step to get things rolling. */
   if (parallel_info && !queue_cur->this_instance && queued_paths > 10) return 1;
 
-  /* If in parallel mode, skip entry, if it is not assigned to this instance */
-  if (queue_cur->this_instance && !queue_cur->this_instance) return 1;
+
   if (pending_favored) {
 
     /* If we have any favored, non-fuzzed new arrivals in the queue,
