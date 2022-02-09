@@ -1561,7 +1561,7 @@ static void qcp_wrapper(int (*selection)(struct queue_entry* q, u32 interval_end
   //Calculate seed percentage for plot data
   parallel_info->percentage_last_considered = 100 *((float) relevant_counter / (float) seeds_with_trace_mini);
 
-  SAYF("relevant: %d // with trace: %d\n", relevant_counter, seeds_with_trace_mini);
+  //SAYF("relevant: %d // with trace: %d\n", relevant_counter, seeds_with_trace_mini);
 }
 
 static void pafl_dynamic_portion_queue_culling() {
