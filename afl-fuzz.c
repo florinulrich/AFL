@@ -1503,19 +1503,20 @@ static inline int pafl_queue_culling(struct queue_entry* q, u32 interval_end) {
       //Find first hit position
       for (int i = 0; i < TRACE_MINI_SIZE; i++)
       {
-        if (q->trace_mini[i] == 1) min_hit_position = i;
+        if (q->trace_mini[i] == 1) {
+          min_hit_position = i;
+          break;
+        }
       }
 
       //Update hit if smaller count is found
       for (int i = min_hit_position; i < TRACE_MINI_SIZE; i++)
       {
         if (q->trace_mini[i] == 1 &&
-          hit_counts[i] < hit_counts[min_hit_position])
-          min_hit_position = i;
+          hit_counts[i] < hit_counts[min_hit_position]) {
+            min_hit_position = i;
+          }
       }
-
-      //TODO: Remove debug code!!
-      // SAYF("Start / i / End / MAX: %d / %d / %d / %d\n", parallel_info->map_interval_start, min_hit_position, interval_end, TRACE_MINI_SIZE);
 
       //Check if min is in interesting interval
       if (min_hit_position >= parallel_info->map_interval_start &&
@@ -1611,6 +1612,8 @@ static void pafl_dynamic_portion_queue_culling() {
   //Increase, decrease instance 
 }
 
+
+/* MARK: Parallel Culling */ 
 /* To guide parallel instances to consider differing subsets of seeds, the guiding information in the parallel_info global variable are used to reduce the set of favored seeds after the intitial queue culling. */
 static void cull_queue_parallel() {
 
@@ -7119,13 +7122,20 @@ static void sync_fuzzers(char** argv) {
     ck_free(qd_path);
     ck_free(qd_synced_path);
 
+    //MARK: Hitcount syncing
+
+    //TODO: Refactor into seperate method
+
     /* Sync the hit count array if necessary */
     if (parallel_info) {
       u8* hc_path_other_fuzzer = alloc_printf("%s/%s/hit_count", sync_dir, sd_ent->d_name);
       u8* hc_path_this_fuzzer = alloc_printf("%s/%s/hit_count", sync_dir, sync_id);
 
+      u8* hc_path_csv = alloc_printf("%s/%s/hit_count.csv", sync_dir, sync_id);
+
       FILE *hc_file_other_fuzzer;
       FILE *hc_file_this_fuzzer;
+      FILE *hc_csv;
       int prev_hc[TRACE_MINI_SIZE];
 
       //TODO: Fix data portability (little / big endian)
@@ -7134,7 +7144,7 @@ static void sync_fuzzers(char** argv) {
       if ( (hc_file_other_fuzzer = fopen(hc_path_other_fuzzer, "rb")) ) {
         //Read
         if (!fread(prev_hc, sizeof(prev_hc), 1, hc_file_other_fuzzer))
-          WARNF("Error reading hit_count file %s", hc_path_other_fuzzer);
+          WARNF("Error reading hit_count file %s\n", hc_path_other_fuzzer);
         fclose(hc_file_other_fuzzer);
 
         //Calculate Max
@@ -7142,19 +7152,36 @@ static void sync_fuzzers(char** argv) {
         {
           hit_counts[i] = hit_counts[i] > prev_hc[i] ? hit_counts[i] : prev_hc[i];
         }
-      }
+      } else WARNF("%s's hit_count could not be opened by %s. Trying again later..\n", sd_ent->d_name, sync_id);
       
       //Write back hit_counts to own directory, if possible
       if ( (hc_file_this_fuzzer = fopen(hc_path_this_fuzzer, "wb")) ) {
 
-        if (!fwrite(hit_counts, sizeof(hit_counts), 1, hc_file_this_fuzzer))
-          WARNF("Error writing hit_count file %s", hc_path_this_fuzzer);
+        if (!fwrite(hit_counts, sizeof(hit_counts), 1, hc_file_this_fuzzer)) {
+          WARNF("Error writing hit_count file %s\n", hc_path_this_fuzzer);
+
+        } else SAYF("%s's hit_count was updated\n", sync_id);
         fclose(hc_file_this_fuzzer);
-      }
+
+        //Write current hit_count to csv
+        if ( (hc_csv = fopen(hc_path_csv, "a+")) ) {
+          fprintf(hc_csv, "%llu; [", get_cur_time() / 1000);
+          for (int i = 0; i < TRACE_MINI_SIZE; i++)
+          {
+            fprintf(hc_csv, "%d, ", hit_counts[i]);
+          }
+          fprintf(hc_csv, "]\n");
+          fflush(hc_csv);
+          fclose(hc_csv);
+
+        } else WARNF("%s's hit_count.csv could not be opened / created. Trying again later..\n", sync_id);
+
+      } else WARNF("%s's hit_count could not be opened / created. Trying again later..\n", sync_id);
 
       //Free paths
       ck_free(hc_path_this_fuzzer);
       ck_free(hc_path_other_fuzzer);
+      ck_free(hc_path_csv);
     }
   }  
 
@@ -8108,7 +8135,7 @@ static void save_cmdline(u32 argc, char** argv) {
 
 #ifndef AFL_LIB
 
-/* Main entry point */
+/* MARK: Main entry point */
 
 int main(int argc, char** argv) {
 
@@ -8463,7 +8490,7 @@ int main(int argc, char** argv) {
     if (stop_soon) goto stop_fuzzing;
   }
 
-  //main loop
+  /* MARK: Main loop */
 
   while (1) {
 
