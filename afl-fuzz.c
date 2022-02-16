@@ -3800,7 +3800,7 @@ static void maybe_update_plot_file(double bitmap_cvg, double eps) {
      execs_per_sec, paths_considered */
 
   fprintf(plot_file, 
-          "%llu, %llu, %u, %u, %u, %u, %0.02f%%, %llu, %llu, %u, %0.02f, %0.02f%%\n",
+          "%llu, %llu, %u, %u, %u, %u, %0.02f%%, %llu, %llu, %u, %0.02f, %0.02f%%, %llu\n",
           get_cur_time() / 1000, queue_cycle - 1, current_entry, queued_paths,
           pending_not_fuzzed, pending_favored, bitmap_cvg, unique_crashes,
           unique_hangs, max_depth, eps, parallel_info->percentage_last_considered, parallel_info->time_spent_ms); /* ignore errors */
