@@ -273,6 +273,7 @@ struct queue_entry {
   u8* trace_mini;                     /* Trace bytes, if kept             */
   u32 tc_ref;                         /* Trace bytes ref count            */
   u8 this_instance;                   /* Tracks wehter to consider entry for parallel instance */
+  u8 p_evaluated;                     /* Tracks wheter a selection algo was run on this seed for this parallel instance */
 
   struct queue_entry *next,           /* Next element, if any             */
                      *next_100;       /* 100 elements ahead               */
@@ -314,6 +315,9 @@ struct parallel_guide
   u32 node_number;
   u32 map_interval_start;
   u32 map_interval_size;
+  u32 map_interval_end;
+  u32 reevaluate_seeds;               /*Set to one to reevaluate all seeds*/
+  u64 time_spent_ms;                  /* Time spent on parallelization overhead */
   float percentage_last_considered; /* Tracked to populate plot data */
 };
 
@@ -1494,46 +1498,50 @@ static void pafl_max_queue_culling() {
 }
 
 
-static inline int pafl_queue_culling(struct queue_entry* q, u32 interval_end) {
+static inline void pafl_queue_culling(struct queue_entry* q) {
+  //Variables (TODO: Check if keeping variables on the stack improves performance)
+  int min_hit_position = 0;
+  u32 interval_start = parallel_info->map_interval_start;
+  u32 interval_end = parallel_info->map_interval_end;
+  
+  //Find first hit position
+  for (int i = 0; i < TRACE_MINI_SIZE; i++)
+  {
+    if (q->trace_mini[i] == 1) {
+      min_hit_position = i;
+      break;
+    }
+  }
 
-      //Set as uninteresting and initial position to 0
-      q->this_instance = 0;
-      int min_hit_position = 0;
-      
-      //Find first hit position
-      for (int i = 0; i < TRACE_MINI_SIZE; i++)
-      {
-        if (q->trace_mini[i] == 1) {
-          min_hit_position = i;
-          break;
-        }
+  //Update hit if smaller count is found
+  for (int i = min_hit_position; i < TRACE_MINI_SIZE; i++)
+  {
+    if (q->trace_mini[i] == 1 &&
+      hit_counts[i] < hit_counts[min_hit_position]) {
+        min_hit_position = i;
       }
+  }
 
-      //Update hit if smaller count is found
-      for (int i = min_hit_position; i < TRACE_MINI_SIZE; i++)
-      {
-        if (q->trace_mini[i] == 1 &&
-          hit_counts[i] < hit_counts[min_hit_position]) {
-            min_hit_position = i;
-          }
-      }
+  //Check if min is in interesting interval
+  if (min_hit_position >= interval_start &&
+    min_hit_position < interval_end) {
+      q->this_instance = 1;
+      return;
+    }
 
-      //Check if min is in interesting interval
-      if (min_hit_position >= parallel_info->map_interval_start &&
-        min_hit_position < interval_end) {
-          q->this_instance = 1;
-          return 1;
-        }
-        return 0;
+  //Set as uninteresting
+  q->this_instance = 0;
+  return;
 }
 
 /* Keep setupt and analysis stuff in one place. Pass chosen selection mechanism */
-static void qcp_wrapper(int (*selection)(struct queue_entry* q, u32 interval_end)) {
+static void qcp_wrapper(int (*selection)(struct queue_entry* q)) {
 
-  //Determine start and endpoints of interval, prevent overflow
-  u32 map_interval_end = parallel_info->map_interval_start + parallel_info->map_interval_size;
+  //Determine start time of selection
+  u64 time_start = get_cur_time();
 
-  map_interval_end = map_interval_end < TRACE_MINI_SIZE ? map_interval_end : TRACE_MINI_SIZE;
+  //Variables (TODO: Check if keeping variables on the stack improves performance)
+  u32 reevaluate = parallel_info->reevaluate_seeds;
 
   //Count relevant seeds and seeds with a trace for performance data
   u32 relevant_counter = 0;
@@ -1547,13 +1555,20 @@ static void qcp_wrapper(int (*selection)(struct queue_entry* q, u32 interval_end
 
       ++seeds_with_trace_mini;
 
-      /* Run selection algorithm. Returns wether the seed was relevant (1) or not (0) */
-      relevant_counter += selection(q, map_interval_end);
+      //Check if seed should be evaluated
+      if(!q->p_evaluated || reevaluate) {
+        /* Run selection algorithm */
+        selection(q);
+        q->p_evaluated = 1;
 
+      }
+      // If the seed is relevant to this instance, count it
+      relevant_counter += q->this_instance;
+      
     } else
     {
       //If the trace_mini is not available, treat as interesting
-      //This aims to make it be evaluated at some point
+      //This aims to make it be run at some point
       q->this_instance = 1;
     }
     q = q->next;
@@ -1562,54 +1577,8 @@ static void qcp_wrapper(int (*selection)(struct queue_entry* q, u32 interval_end
   //Calculate seed percentage for plot data
   parallel_info->percentage_last_considered = 100 *((float) relevant_counter / (float) seeds_with_trace_mini);
 
-  //SAYF("relevant: %d // with trace: %d\n", relevant_counter, seeds_with_trace_mini);
-}
-
-static void pafl_dynamic_portion_queue_culling() {
-
-  //Determine start and endpoints of interval, prevent overflow
-  u32 map_interval_end = parallel_info->map_interval_start + parallel_info->map_interval_size;
-
-  map_interval_end = map_interval_end < TRACE_MINI_SIZE ? map_interval_end : TRACE_MINI_SIZE;
-
-  //Count relevant seeds for performance data
-  u32 relevant_counter = 0;
-
-  struct queue_entry* q = queue;
-  while (q) //Iterate over all seeds in queue
-  {
-    //Prevent segmentation fault
-    if(q->trace_mini) {
-
-      //Set as uninteresting (not set could mean deactivated parallelism)
-      q->this_instance = 0;
-
-      //TODO: Make sure fuzzing happens even if there is no hit (yet?)
-      int biggest_hit_position = 0;
-
-      for (int i = 0; i < TRACE_MINI_SIZE; i++)
-      {
-        if (q->trace_mini[i] == 1 &&
-          hit_counts[i] > hit_counts[biggest_hit_position])
-          biggest_hit_position = i;
-      }
-
-      if (biggest_hit_position >= parallel_info->map_interval_start &&
-        biggest_hit_position < map_interval_end) {
-          q->this_instance = 1;
-          ++relevant_counter;
-        }
-      
-    }
-    q = q->next;
-  }
-
-  //Calculate seed percentage for plot data
-  parallel_info->percentage_last_considered = 100 *((float) relevant_counter / (float) queued_paths);
-
-  //TODO: Maybe put in seperate method
-  
-  //Increase, decrease instance 
+  //Determine time spent on this culling iteration then add to parallel_info
+  parallel_info->time_spent_ms += (get_cur_time() - time_start);
 }
 
 
@@ -1620,22 +1589,13 @@ static void cull_queue_parallel() {
   switch (parallel_info->parallel_mode)
   {
   case 1 : /* PAFL Algo culling*/
-
-    //TODO: Implement original PAFL
     qcp_wrapper(pafl_queue_culling);
     break;
-
 
   case 2 : /* PAFL Max Algo culling*/
 
     //TODO: Implement PAFL Algo
     pafl_max_queue_culling();
-    break;
-
-  case 3: /* Dynamic map partition size culling */
-
-    //TODO: Implement dynamic map division
-    pafl_dynamic_portion_queue_culling();
     break;
   
   default: /* Primitive Map division culling */
@@ -8237,11 +8197,19 @@ int main(int argc, char** argv) {
           sscanf(optarg, "%u/%u:%u", &(parallel_info->node_number), &(parallel_info->total_node_count), &(parallel_info->parallel_mode));
         }
 
-          //Determine interval size (Us TRACE_MINI_SIZE because trace mini will be iterated)
+          //Determine interval size (Use TRACE_MINI_SIZE because trace mini will be iterated)
           parallel_info->map_interval_size = TRACE_MINI_SIZE /parallel_info->total_node_count;
 
           //Determine instance start position
           parallel_info->map_interval_start = parallel_info->map_interval_size * (parallel_info->node_number-1);
+
+          //Determine interval end position
+          parallel_info->map_interval_end = parallel_info->map_interval_start + parallel_info->map_interval_size;
+
+          //TODO: Prevent overflow of interval end (unsure if necessary). Check!
+          //  parallel_info->map_interval_end = parallel_info->map_interval_end < TRACE_MINI_SIZE ? parallel_info->map_interval_end : TRACE_MINI_SIZE;
+
+
 
         break;
 
