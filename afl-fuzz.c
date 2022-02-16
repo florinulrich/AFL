@@ -1446,55 +1446,32 @@ static void primitive_map_division_culling() {
   // printf("%6.2f %% of paths considered\n", parallel_info->percentage_last_considered);
 }
 
-static void pafl_max_queue_culling() {
+/* Look for the max hit_count of the seed to direct instance (hopefully) toward a different branch in the target */ 
+static inline void pafl_max_queue_culling(struct queue_entry* q) {
+  //Variables (Check if keeping variables on the stack improves performance)
+  int max_hit_position = 0;
+  u32 interval_start = parallel_info->map_interval_start;
+  u32 interval_end = parallel_info->map_interval_end;
 
-  //TODO Refactor if else statement and multiple assignments of this instance
-
-  //Determine start and endpoints of interval, prevent overflow
-  u32 map_interval_end = parallel_info->map_interval_start + parallel_info->map_interval_size;
-
-  map_interval_end = map_interval_end < TRACE_MINI_SIZE ? map_interval_end : TRACE_MINI_SIZE;
-
-  //Count relevant seeds for performance data
-  u32 relevant_counter = 0;
-
-  struct queue_entry* q = queue;
-  while (q) //Iterate over all seeds in queue
+  //Update hit if bigger count is found
+  for (int i = 0; i < TRACE_MINI_SIZE; i++)
   {
-    //Prevent segmentation fault
-    if(q->trace_mini) {
-
-      //Set as uninteresting
-      q->this_instance = 0;
-
-      //TODO: Make sure fuzzing happens even if there is no hit (yet?)
-      int biggest_hit_position = 0;
-
-      for (int i = 0; i < TRACE_MINI_SIZE; i++)
-      {
-        if (q->trace_mini[i] == 1 &&
-          hit_counts[i] > hit_counts[biggest_hit_position])
-          biggest_hit_position = i;
+    if (q->trace_mini[i] == 1 &&
+      hit_counts[i] > hit_counts[max_hit_position]) {
+        max_hit_position = i;
       }
-
-      if (biggest_hit_position >= parallel_info->map_interval_start &&
-        biggest_hit_position < map_interval_end) {
-          q->this_instance = 1;
-          ++relevant_counter;
-        }
-      
-    } else
-    {
-      //If the trace_mini is not available, treat as interesting
-      //Otherwise no seed would be interesting in the beginning
-      q->this_instance = 1;
-    }
-    
-    q = q->next;
   }
 
-  //Calculate seed percentage for plot data
-  parallel_info->percentage_last_considered = 100 *((float) relevant_counter / (float) queued_paths);
+  //Check if min is in interesting interval
+  if (max_hit_position >= interval_start &&
+    max_hit_position < interval_end) {
+      q->this_instance = 1;
+      return;
+    }
+
+  //Set as uninteresting
+  q->this_instance = 0;
+  return;
 }
 
 
@@ -1595,7 +1572,7 @@ static void cull_queue_parallel() {
   case 2 : /* PAFL Max Algo culling*/
 
     //TODO: Implement PAFL Algo
-    pafl_max_queue_culling();
+    qcp_wrapper(pafl_max_queue_culling);
     break;
   
   default: /* Primitive Map division culling */
