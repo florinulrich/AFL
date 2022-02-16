@@ -1535,7 +1535,7 @@ static inline void pafl_queue_culling(struct queue_entry* q) {
 }
 
 /* Keep setupt and analysis stuff in one place. Pass chosen selection mechanism */
-static void qcp_wrapper(int (*selection)(struct queue_entry* q)) {
+static void qcp_wrapper(void (*selection)(struct queue_entry* q)) {
 
   //Determine start time of selection
   u64 time_start = get_cur_time();
@@ -3803,7 +3803,7 @@ static void maybe_update_plot_file(double bitmap_cvg, double eps) {
           "%llu, %llu, %u, %u, %u, %u, %0.02f%%, %llu, %llu, %u, %0.02f, %0.02f%%\n",
           get_cur_time() / 1000, queue_cycle - 1, current_entry, queued_paths,
           pending_not_fuzzed, pending_favored, bitmap_cvg, unique_crashes,
-          unique_hangs, max_depth, eps, parallel_info->percentage_last_considered); /* ignore errors */
+          unique_hangs, max_depth, eps, parallel_info->percentage_last_considered, parallel_info->time_spent_ms); /* ignore errors */
 
   fflush(plot_file);
 
@@ -7588,7 +7588,7 @@ EXP_ST void setup_dirs_fds(void) {
 
   fprintf(plot_file, "# unix_time, cycles_done, cur_path, paths_total, "
                      "pending_total, pending_favs, map_size, unique_crashes, "
-                     "unique_hangs, max_depth, execs_per_sec, paths_considered\n");
+                     "unique_hangs, max_depth, execs_per_sec, paths_considered, parallel overhead (ms)\n");
                      /* ignore errors */
 
 }
