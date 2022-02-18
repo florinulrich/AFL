@@ -1511,8 +1511,8 @@ static inline void pafl_queue_culling(struct queue_entry* q) {
   return;
 }
 
-/* Keep setupt and analysis stuff in one place. Pass chosen selection mechanism */
-static void qcp_wrapper(void (*selection)(struct queue_entry* q)) {
+/* Keep setupt and analysis stuff in one place. Pass chosen selection mechanism. Pass 0 to use evaluation on demand*/
+static void qcp_wrapper(void (*selection)(struct queue_entry* q), int always_reevaluate) {
 
   //Determine start time of selection
   u64 time_start = get_cur_time();
@@ -1533,7 +1533,7 @@ static void qcp_wrapper(void (*selection)(struct queue_entry* q)) {
       ++seeds_with_trace_mini;
 
       //Check if seed should be evaluated
-      if(!q->p_evaluated || reevaluate) {
+      if(!q->p_evaluated || reevaluate || always_reevaluate) {
         /* Run selection algorithm */
         selection(q);
         q->p_evaluated = 1;
@@ -1566,13 +1566,11 @@ static void cull_queue_parallel() {
   switch (parallel_info->parallel_mode)
   {
   case 1 : /* PAFL Algo culling*/
-    qcp_wrapper(pafl_queue_culling);
+    qcp_wrapper(pafl_queue_culling, 1);
     break;
 
   case 2 : /* PAFL Max Algo culling*/
-
-    //TODO: Implement PAFL Algo
-    qcp_wrapper(pafl_max_queue_culling);
+    qcp_wrapper(pafl_max_queue_culling, 1);
     break;
   
   default: /* Primitive Map division culling */
@@ -3746,6 +3744,18 @@ static void write_stats_file(double bitmap_cvg, double stability, double eps) {
 
   fclose(f);
 
+}
+
+/* MARK: Update the seed_log file */
+static void update_seed_log(u32 seed_id) {
+  u8* slog_path = alloc_printf("%s/%s/seed_log.csv", sync_dir, sync_id);
+  FILE* slog_file;
+
+  if ( (slog_file = fopen(slog_path, "a+")) ) {
+    fprintf(slog_file, "%llu, %u", get_cur_time() / 1000, seed_id);
+    fflush(slog_file);
+
+  } else WARNF("%s: seed_log.csv could not be updated!", sync_id);
 }
 
 
@@ -7065,6 +7075,11 @@ static void sync_fuzzers(char** argv) {
 
     /* Sync the hit count array if necessary */
     if (parallel_info) {
+
+      //Measure sync time
+      u32 start_time = get_cur_time();
+
+      //Perform sync
       u8* hc_path_other_fuzzer = alloc_printf("%s/%s/hit_count", sync_dir, sd_ent->d_name);
       u8* hc_path_this_fuzzer = alloc_printf("%s/%s/hit_count", sync_dir, sync_id);
 
@@ -7119,6 +7134,9 @@ static void sync_fuzzers(char** argv) {
       ck_free(hc_path_this_fuzzer);
       ck_free(hc_path_other_fuzzer);
       ck_free(hc_path_csv);
+
+      //Add time to overhead counter
+      parallel_info->time_spent_ms += (get_cur_time() - start_time);
     }
   }  
 
@@ -7565,7 +7583,7 @@ EXP_ST void setup_dirs_fds(void) {
 
   fprintf(plot_file, "# unix_time, cycles_done, cur_path, paths_total, "
                      "pending_total, pending_favs, map_size, unique_crashes, "
-                     "unique_hangs, max_depth, execs_per_sec, paths_considered, parallel overhead (ms)\n");
+                     "unique_hangs, max_depth, execs_per_sec, paths_considered, parallel_overhead(ms)\n");
                      /* ignore errors */
 
 }
@@ -8484,6 +8502,10 @@ int main(int argc, char** argv) {
     }
 
     skipped_fuzz = fuzz_one(use_argv);
+
+    //MARK: Log fuzzed seeds
+    /* Log order in which seeds are fuzzed */
+    if (!skipped_fuzz) update_seed_log(current_entry);
 
     if (!stop_soon && sync_id && !skipped_fuzz) {
       
