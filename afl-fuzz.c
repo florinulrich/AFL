@@ -317,6 +317,7 @@ struct parallel_guide
   u32 map_interval_size;
   u32 map_interval_end;
   u32 reevaluate_seeds;               /*Set to one to reevaluate all seeds*/
+  u32 reevaluate_on_sync;             /*Set to one to reevaluate on sync*/
   u64 time_spent_ms;                  /* Time spent on parallelization overhead */
   float percentage_last_considered; /* Tracked to populate plot data */
 };
@@ -1398,79 +1399,55 @@ static void cull_queue(void) {
 
 }
 
-static void primitive_map_division_culling() {
-
-  //Determine start and endpoints of interval, prevent overflow
-  u32 map_interval_end = parallel_info->map_interval_start + parallel_info->map_interval_size;
-
-  map_interval_end = map_interval_end < TRACE_MINI_SIZE ? map_interval_end : TRACE_MINI_SIZE;
-
-  //TODO: Remove Debug code
-  // printf("[start, end, MAP_SIZE]: [%d, %d, %d]\n", parallel_info->map_interval_start, map_interval_end, MAP_SIZE);
-
-  //Count relevant seeds for performance data
-  u32 relevant_counter = 0;
-
-  struct queue_entry* q = queue;
-  while (q) //Iterate over all seeds in queue
-  {
-    //Prevent segmentation fault
-    if(q->trace_mini) {
-
-      //Set as uninteresting (not set could mean deactivated parallelism)
-      q->this_instance = 0;
-
-      //If one bit is set in interval, mark as a seed to consider in this instance
-      for (int i = parallel_info->map_interval_start; i < map_interval_end; ++i) {
-
-        if (q->trace_mini[i] == 1) {
-          relevant_counter++;
-          q->this_instance = 1;
-          break;
-        }
-      }
-    }
-    q = q->next;
-  }
-
-  //Calculate seed percentage for plot data
-  parallel_info->percentage_last_considered = 100 *((float) relevant_counter / (float) queued_paths);
-
-
-
-  //TODO: Other counting measures might be more appropriate
-  //Maybe count how many favorites where discarded?
-
-  //TODO: Remove debug code
-  // printf("%d/%d paths considered\n", relevant_counter, queued_paths);
-  // printf("%6.2f %% of paths considered\n", parallel_info->percentage_last_considered);
-}
-
-/* Look for the max hit_count of the seed to direct instance (hopefully) toward a different branch in the target */ 
+/* Check if if seed hits the local max but not the ones of other instances */ 
 static inline void pafl_max_queue_culling(struct queue_entry* q) {
   //Variables (Check if keeping variables on the stack improves performance)
-  int max_hit_position = 0;
-  u32 interval_start = parallel_info->map_interval_start;
-  u32 interval_end = parallel_info->map_interval_end;
+  u32 interval_size = parallel_info->map_interval_size;
+  u32 node_count = parallel_info->total_node_count;
 
-  //Update hit if bigger count is found
-  for (int i = 0; i < TRACE_MINI_SIZE; i++)
-  {
-    if (q->trace_mini[i] == 1 &&
-      hit_counts[i] > hit_counts[max_hit_position]) {
-        max_hit_position = i;
-      }
+  //Offset by one to start count at 0
+  u32 node_number = parallel_info->node_number-1;
+
+  //initialize local_max array to the first position int each sector
+  int *local_max = ck_alloc(sizeof(int[node_count]));
+  for (int i = 0; i < node_count; i++) local_max[i] = interval_size*i;
+
+  //Find local max for all instances
+  for (int i = 0; i < TRACE_MINI_SIZE; i++) {
+
+    //Calculate current node of interval
+    u32 current_node = i / interval_size;
+
+    //Prevent map is not evenly divisable
+    if (current_node == node_count) break;
+
+    //See if new position contains new max
+    if (hit_counts[i] > hit_counts[local_max[current_node]]){
+      local_max[current_node] = i;
+    }
   }
 
-  //Check if min is in interesting interval
-  if (max_hit_position >= interval_start &&
-    max_hit_position < interval_end) {
-      q->this_instance = 1;
-      return;
-    }
+  //Check if seed hits this instances local max, return if not
+  if (q->trace_mini[local_max[node_number]] == 0) {
+    q->this_instance = 0;
+    return;
+  }
 
-  //Set as uninteresting
-  q->this_instance = 0;
+  // //Check if it does not hit the other max only do this when more than 50% of seeds are currently being considered
+  // if (parallel_info->percentage_last_considered > 0.5) {
+
+  //   for (int i = 0; i < node_count; i++) {
+  //     if (i == node_number) continue;
+
+  //     if (q->trace_mini[local_max[i]] == 1) {
+  //       q->this_instance = 0;
+  //       return;
+  //     }
+  //   }
+  // }
+
+  //Set as interesting
+  q->this_instance = 1;
   return;
 }
 
@@ -1552,7 +1529,7 @@ static void qcp_wrapper(void (*selection)(struct queue_entry* q), int always_ree
   }
 
   //Calculate seed percentage for plot data
-  parallel_info->percentage_last_considered = 100 *((float) relevant_counter / (float) seeds_with_trace_mini);
+  parallel_info->percentage_last_considered = (float) relevant_counter / (float) seeds_with_trace_mini;
 
   //Determine time spent on this culling iteration then add to parallel_info
   parallel_info->time_spent_ms += (get_cur_time() - time_start);
@@ -1573,10 +1550,16 @@ static void cull_queue_parallel() {
     qcp_wrapper(pafl_max_queue_culling, 1);
     break;
   
-  default: /* Primitive Map division culling */
-
-    primitive_map_division_culling();
+  case 3: /* PAFL, revaluate on sync */
+    qcp_wrapper(pafl_queue_culling, 0);
     break;
+
+  case 4: /* PAFL, evaluate once */
+    qcp_wrapper(pafl_queue_culling, 0);
+    break;
+
+  default:
+      FATAL("No algo for parallelization was chosen!");
   }
 }
 
@@ -3748,11 +3731,12 @@ static void write_stats_file(double bitmap_cvg, double stability, double eps) {
 
 /* MARK: Update the seed_log file */
 static void update_seed_log(u32 seed_id) {
-  u8* slog_path = alloc_printf("%s/%s/seed_log.csv", sync_dir, sync_id);
+
+  u8* slog_path = parallel_info ? alloc_printf("%s/%s/seed_log.csv", sync_dir, sync_id) : alloc_printf("%s/seed_log.csv", out_dir);
   FILE* slog_file;
 
   if ( (slog_file = fopen(slog_path, "a+")) ) {
-    fprintf(slog_file, "%llu, %u", get_cur_time() / 1000, seed_id);
+    fprintf(slog_file, "%llu, %u\n", get_cur_time() / 1000, seed_id);
     fflush(slog_file);
 
   } else WARNF("%s: seed_log.csv could not be updated!", sync_id);
@@ -3765,6 +3749,13 @@ static void maybe_update_plot_file(double bitmap_cvg, double eps) {
 
   static u32 prev_qp, prev_pf, prev_pnf, prev_ce, prev_md;
   static u64 prev_qc, prev_uc, prev_uh;
+  static float percentage_last_considered = 0;
+  static u64 parallel_overhead = 0;
+
+  if (parallel_info) {
+    percentage_last_considered = parallel_info->percentage_last_considered * 100;
+    parallel_overhead = parallel_info->time_spent_ms;
+  }
 
   if (prev_qp == queued_paths && prev_pf == pending_favored && 
       prev_pnf == pending_not_fuzzed && prev_ce == current_entry &&
@@ -3782,18 +3773,16 @@ static void maybe_update_plot_file(double bitmap_cvg, double eps) {
 
   /* Fields in the file:
 
-     unix_time, cycles_done, cur_path, paths_total, paths_not_fuzzed,
-     favored_not_fuzzed, unique_crashes, unique_hangs, max_depth,
-     execs_per_sec, paths_considered */
-
+  unix_time, cycles_done, cur_path, paths_total, paths_not_fuzzed,
+  favored_not_fuzzed, unique_crashes, unique_hangs, max_depth,
+  execs_per_sec, paths_considered */
   fprintf(plot_file, 
           "%llu, %llu, %u, %u, %u, %u, %0.02f%%, %llu, %llu, %u, %0.02f, %0.02f%%, %llu\n",
           get_cur_time() / 1000, queue_cycle - 1, current_entry, queued_paths,
           pending_not_fuzzed, pending_favored, bitmap_cvg, unique_crashes,
-          unique_hangs, max_depth, eps, parallel_info->percentage_last_considered, parallel_info->time_spent_ms); /* ignore errors */
+          unique_hangs, max_depth, eps, percentage_last_considered, parallel_overhead); /* ignore errors */
 
   fflush(plot_file);
-
 }
 
 
@@ -7076,8 +7065,11 @@ static void sync_fuzzers(char** argv) {
     /* Sync the hit count array if necessary */
     if (parallel_info) {
 
+      //If reevaluate on sync, set reevaluate to 1 to tell culling that a sync was performed
+      if (parallel_info->reevaluate_on_sync) parallel_info->reevaluate_seeds = 1;
+
       //Measure sync time
-      u32 start_time = get_cur_time();
+      u64 start_time = get_cur_time();
 
       //Perform sync
       u8* hc_path_other_fuzzer = alloc_printf("%s/%s/hit_count", sync_dir, sd_ent->d_name);
@@ -8160,7 +8152,7 @@ int main(int argc, char** argv) {
         sync_id = ck_strdup(optarg);
         break;
 
-      case 'P': /* parallel options */
+      case 'P': /*MARK: parallel options */
 
         //TODO: Make dependend on selected mode
         keep_hit_count = 1;
@@ -8184,12 +8176,15 @@ int main(int argc, char** argv) {
           sscanf(optarg, "%u/%u", &(parallel_info->node_number), &(parallel_info->total_node_count));
 
           //Set mode to default
-          parallel_info->parallel_mode = 0;
+          parallel_info->parallel_mode = 1;
         }
         else {
 
           //TODO: Implement switch statement for human readable mode names
           sscanf(optarg, "%u/%u:%u", &(parallel_info->node_number), &(parallel_info->total_node_count), &(parallel_info->parallel_mode));
+
+          //If mode is 3, reevaluate after syncing
+          if (parallel_info->parallel_mode == 3) parallel_info->reevaluate_on_sync = 1;
         }
 
           //Determine interval size (Use TRACE_MINI_SIZE because trace mini will be iterated)
@@ -8201,10 +8196,8 @@ int main(int argc, char** argv) {
           //Determine interval end position
           parallel_info->map_interval_end = parallel_info->map_interval_start + parallel_info->map_interval_size;
 
-          //TODO: Prevent overflow of interval end (unsure if necessary). Check!
-          //  parallel_info->map_interval_end = parallel_info->map_interval_end < TRACE_MINI_SIZE ? parallel_info->map_interval_end : TRACE_MINI_SIZE;
-
-
+          //Include end in case of uneven distribution
+          if (parallel_info->node_number == parallel_info->total_node_count) parallel_info->map_interval_end = TRACE_MINI_SIZE;
 
         break;
 
