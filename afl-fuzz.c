@@ -1529,7 +1529,7 @@ static void qcp_wrapper(void (*selection)(struct queue_entry* q), int always_ree
   }
 
   //Set reevaluate to 0, will be set to 1 again if need arises
-  parallel_info->reevaluate = 0;
+  parallel_info->reevaluate_seeds = 0;
 
   //Calculate seed percentage for plot data
   parallel_info->percentage_last_considered = (float) relevant_counter / (float) seeds_with_trace_mini;
