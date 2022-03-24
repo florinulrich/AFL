@@ -380,6 +380,18 @@ static u64 get_cur_time(void) {
 
 }
 
+//FIXME: Remove weird debug log
+static log_to_debug(char* message) {
+    u8* slog_path = parallel_info ? alloc_printf("%s/%s/debug_log.csv", sync_dir, sync_id) : alloc_printf("%s/debug_log.csv", out_dir);
+    FILE* slog_file;
+
+  if ( (slog_file = fopen(slog_path, "a+")) ) {
+    fprintf(slog_file, "%llu, %u\n", get_cur_time() / 1000, message);
+    fflush(slog_file);
+
+  } else WARNF("%s: debug_log.csv could not be updated!", sync_id);
+}
+
 
 /* Get unix time in microseconds */
 
@@ -6929,7 +6941,6 @@ abandon_entry:
 
 }
 
-
 /* Grab interesting test cases from other fuzzers. */
 
 static void sync_fuzzers(char** argv) {
@@ -7064,7 +7075,7 @@ static void sync_fuzzers(char** argv) {
     //MARK: Hitcount syncing
 
     //FIXME: Debug message
-    SAYF("Will sync hit_counts at: %d\n", get_cur_time() / 1000);
+    log_to_debug("Will sync hit_counts");
     
     //TODO: Refactor into seperate method
 
@@ -7137,7 +7148,7 @@ static void sync_fuzzers(char** argv) {
       parallel_info->time_spent_ms += (get_cur_time() - start_time);
 
       //FIXME: Debug message
-      SAYF("Synced hit_counts at: %d\n", get_cur_time() / 1000);
+      log_to_debug("Synced hit_counts");
     }
   }  
   closedir(sd);
@@ -8461,15 +8472,15 @@ int main(int argc, char** argv) {
 
     u8 skipped_fuzz;
     //FIXME: Debug message
-    SAYF("Will cull queue at: %d\n", get_cur_time() / 1000);
+    log_to_debug("Will cull queue");
     cull_queue();
-    SAYF("Culled queue at: %d\n", get_cur_time() / 1000);
+    log_to_debug("Culled queue");
 
     /* If guiding information for parallel moode exists, cull queue further */
     //FIXME: Debug message
-    SAYF("Will cull queue parallel at: %d\n", get_cur_time() / 1000);
+    log_to_debug("Will cull queue parallel");
     if (parallel_info) cull_queue_parallel();
-    SAYF("Culled queue parallel at: %d\n", get_cur_time() / 1000);
+    log_to_debug("Culled queue parallel");
 
 
     if (!queue_cur) {
@@ -8506,23 +8517,23 @@ int main(int argc, char** argv) {
       if (sync_id && queue_cycle == 1 && getenv("AFL_IMPORT_FIRST"))
 
         //FIXME: Debug message
-        SAYF("Will sync fuzzers at: %d\n", get_cur_time() / 1000);
+        log_to_debug("Will sync fuzzers");
         sync_fuzzers(use_argv);
-        SAYF("Synced fuzzer at: %d\n", get_cur_time() / 1000);
+        log_to_debug("Synced fuzzer");
 
     }
 
     //FIXME: Debug message
-    SAYF("Entering fuzz_one() at: %d\n", get_cur_time() / 1000);
+    log_to_debug("Entering fuzz_one()");
     skipped_fuzz = fuzz_one(use_argv);
-    SAYF("Exited fuzz_one() at: %d\n", get_cur_time() / 1000);
+    log_to_debug("Exited fuzz_one()");
 
     //MARK: Log fuzzed seeds
     /* Log order in which seeds are fuzzed */
     //FIXME: Debug message
-    SAYF("Will log seed at: %d\n", get_cur_time() / 1000);
+    log_to_debug("Will log seed");
     if (!skipped_fuzz) update_seed_log(current_entry);
-    SAYF("Loged seed at: %d\n", get_cur_time() / 1000);
+    log_to_debug("Loged seed");
 
     if (!stop_soon && sync_id && !skipped_fuzz) {
       
