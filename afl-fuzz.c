@@ -381,12 +381,12 @@ static u64 get_cur_time(void) {
 }
 
 //FIXME: Remove weird debug log
-static log_to_debug(char* message) {
+static void log_to_debug(char* message) {
     u8* slog_path = parallel_info ? alloc_printf("%s/%s/debug_log.csv", sync_dir, sync_id) : alloc_printf("%s/debug_log.csv", out_dir);
     FILE* slog_file;
 
   if ( (slog_file = fopen(slog_path, "a+")) ) {
-    fprintf(slog_file, "%llu, %u\n", get_cur_time() / 1000, message);
+    fprintf(slog_file, "%llu, %s\n", get_cur_time() / 1000, message);
     fflush(slog_file);
 
   } else WARNF("%s: debug_log.csv could not be updated!", sync_id);
@@ -8514,13 +8514,12 @@ int main(int argc, char** argv) {
 
       prev_queued = queued_paths;
 
-      if (sync_id && queue_cycle == 1 && getenv("AFL_IMPORT_FIRST"))
-
+      if (sync_id && queue_cycle == 1 && getenv("AFL_IMPORT_FIRST")) {
         //FIXME: Debug message
         log_to_debug("Will sync fuzzers");
         sync_fuzzers(use_argv);
         log_to_debug("Synced fuzzer");
-
+      }
     }
 
     //FIXME: Debug message
@@ -8537,9 +8536,11 @@ int main(int argc, char** argv) {
 
     if (!stop_soon && sync_id && !skipped_fuzz) {
       
-      if (!(sync_interval_cnt++ % SYNC_INTERVAL))
-        sync_fuzzers(use_argv);
-
+      if (!(sync_interval_cnt++ % SYNC_INTERVAL)) {
+        log_to_debug("Syncing fuzzers");
+         sync_fuzzers(use_argv);
+         log_to_debug("Fuzzers synced");
+      }
     }
 
     if (!stop_soon && exit_1) stop_soon = 2;
