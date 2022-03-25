@@ -387,7 +387,7 @@ static void log_to_debug(char* message) {
 
   if ( (slog_file = fopen(slog_path, "a+")) ) {
     fprintf(slog_file, "%llu, %s\n", get_cur_time() / 1000, message);
-    fflush(slog_file);
+    fclose(slog_file);
 
   } else WARNF("%s: debug_log.csv could not be updated!", sync_id);
 }
