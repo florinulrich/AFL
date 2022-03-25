@@ -3740,7 +3740,7 @@ static void update_seed_log(u32 seed_id) {
 
   if ( (slog_file = fopen(slog_path, "a+")) ) {
     fprintf(slog_file, "%llu, %u\n", get_cur_time() / 1000, seed_id);
-    fflush(slog_file);
+    fclose(slog_file);
 
   } else WARNF("%s: seed_log.csv could not be updated!", sync_id);
 }
