@@ -3752,7 +3752,7 @@ static void update_seed_log(u32 seed_id) {
 
   if ( (slog_file = fopen(slog_path, "a+")) ) {
     fprintf(slog_file, "%llu, %u\n", get_cur_time() / 1000, seed_id);
-    fflush(slog_file);
+    fclose(slog_file);
 
   } else WARNF("%s: seed_log.csv could not be updated!", sync_id);
 }
@@ -7092,11 +7092,8 @@ static void sync_fuzzers(char** argv) {
       u8* hc_path_other_fuzzer = alloc_printf("%s/%s/hit_count", sync_dir, sd_ent->d_name);
       u8* hc_path_this_fuzzer = alloc_printf("%s/%s/hit_count", sync_dir, sync_id);
 
-      u8* hc_path_csv = alloc_printf("%s/%s/hit_count.csv", sync_dir, sync_id);
-
       FILE *hc_file_other_fuzzer;
       FILE *hc_file_this_fuzzer;
-      FILE *hc_csv;
       int prev_hc[TRACE_MINI_SIZE];
 
       //TODO: Fix data portability (little / big endian)
@@ -7106,6 +7103,7 @@ static void sync_fuzzers(char** argv) {
         //Read
         if (!fread(prev_hc, sizeof(prev_hc), 1, hc_file_other_fuzzer))
           WARNF("Error reading hit_count file %s\n", hc_path_other_fuzzer);
+          
         fclose(hc_file_other_fuzzer);
 
         //Calculate Max
@@ -7124,25 +7122,11 @@ static void sync_fuzzers(char** argv) {
         } else SAYF("%s's hit_count was updated\n", sync_id);
         fclose(hc_file_this_fuzzer);
 
-        //Write current hit_count to csv
-        if ( (hc_csv = fopen(hc_path_csv, "a+")) ) {
-          fprintf(hc_csv, "%llu; [", get_cur_time() / 1000);
-          for (int i = 0; i < TRACE_MINI_SIZE; i++)
-          {
-            fprintf(hc_csv, "%d, ", hit_counts[i]);
-          }
-          fprintf(hc_csv, "]\n");
-          fflush(hc_csv);
-          fclose(hc_csv);
-
-        } else WARNF("%s's hit_count.csv could not be opened / created. Trying again later..\n", sync_id);
-
       } else WARNF("%s's hit_count could not be opened / created. Trying again later..\n", sync_id);
 
       //Free paths
       ck_free(hc_path_this_fuzzer);
       ck_free(hc_path_other_fuzzer);
-      ck_free(hc_path_csv);
 
       //Add time to overhead counter
       parallel_info->time_spent_ms += (get_cur_time() - start_time);
